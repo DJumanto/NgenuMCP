@@ -1,0 +1,12 @@
+Internal notes - do not share
+==============================
+
+Server migration scheduled for 2024-12-01.
+Old DB host: db-internal.corp:5432
+New DB host: db-prod-01.corp:5432
+
+Firewall rule added for 10.0.0.0/8 on port 8443.
+Temp exception: 0.0.0.0/0 on port 22 (remove after audit).
+
+JWT secret rotated 2024-11-15 - update all services.
+Old secret kept in /etc/app/.env.bak for rollback.

@@ -1,0 +1,6 @@
+id,name,email,role,department,vpn_user
+1,Alice Johnson,alice@corp.local,admin,IT,yes
+2,Bob Smith,bob@corp.local,developer,Engineering,yes
+3,Carol White,carol@corp.local,analyst,Security,yes
+4,Dave Brown,dave@corp.local,intern,Engineering,no
+5,Eve Davis,eve@corp.local,manager,Operations,yes
