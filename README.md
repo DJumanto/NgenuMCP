@@ -16,14 +16,23 @@ pip install -r requirements.txt
 ```
 python NgenuMCP.py <url> [options]
 
-positional:
-  url                   Target MCP endpoint
+positional arguments:
+  url                   Target MCP endpoint (e.g. http://host:3000/mcp)
 
 options:
-  -H KEY:VALUE          Extra HTTP header (repeatable)
+  -h, --help            show this help message and exit
+  -H, --header KEY:VALUE
+                        Extra HTTP header, repeatable
   --ping                Ping the server instead of enumerating
   --no-init             Skip MCP initialize handshake
   --raw                 Print raw JSON output
+  -vt                   Verbose: show full tool schemas
+  -vp                   Verbose: show full prompt arguments
+  -vr                   Verbose: show full resource details
+  -vv                   Verbose: show full detail for everything
+  -to                   Enumerate tools only
+  -po                   Enumerate prompts only
+  -ro                   Enumerate resources only
 ```
 
 **Examples:**

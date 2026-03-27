@@ -189,7 +189,7 @@ def main():
         with EnumClient(args.url, headers) as client:
             if args.ping:
                 resp = client._rpc("ping")
-                print("Reachable" if "result" in resp else f"Unexpected: {resp}")
+                print(f"[+] Host {args.url} is reachable 🤖🤖🤖" if "result" in resp else f"[!] Host {args.url} is not reachable ☠️☠️☠️: {resp}")
                 return
 
             if not args.no_init:
