@@ -82,17 +82,17 @@ def server_settings() -> dict:
 
 @mcp.resource("file:///internal/credentials.txt", description="Leaked credential pairs found on the target server", mime_type="text/plain")
 def credentials_file() -> str:
-    return (FILES / "credentials.txt").read_text()
+    return (FILES / "credentials.txt").read_text(encoding="utf-8")
 
 
 @mcp.resource("file:///internal/notes.txt", description="Internal admin notes containing infrastructure details", mime_type="text/plain")
 def notes_file() -> str:
-    return (FILES / "notes.txt").read_text()
+    return (FILES / "notes.txt").read_text(encoding="utf-8")
 
 
 @mcp.resource("file:///internal/employees.csv", description="Employee directory with roles and VPN access flags", mime_type="text/csv")
 def employees_file() -> str:
-    return (FILES / "employees.csv").read_text()
+    return (FILES / "employees.csv").read_text(encoding="utf-8")
 
 
 @mcp.resource("file:///reports/pentest_report.pdf", description="Latest penetration testing report (PDF)", mime_type="application/pdf")
@@ -109,7 +109,7 @@ def get_scan_report(scan_id: str) -> dict:
 def get_internal_file(filename: str) -> str:
     path = FILES / f"{filename}.txt"
     if path.exists():
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
     return f"File not found: {filename}.txt"
 
 

@@ -2,16 +2,7 @@ import json
 
 from httpx import Client, HTTPError
 
-_ENUM_METHODS = {
-    "prompts": ["prompts/list"],
-    "resources": ["resources/list", "resources/templates/list"],
-    "tools": ["tools/list"],
-}
-
-_DEFAULT_HEADERS = {
-    "Accept": "application/json, text/event-stream",
-    "Content-Type": "application/json",
-}
+from .const import _ENUM_METHODS, _DEFAULT_HEADERS
 
 
 def _parse_response(resp) -> dict:
@@ -86,6 +77,15 @@ class EnumClient:
         if not self._initialized:
             self.initiate_session()
         return self.enumerate(only=only)
+
+    def call_tool(self, name: str, arguments: dict = None) -> dict:
+        return self._rpc("tools/call", {"name": name, "arguments": arguments or {}})
+
+    def get_prompt(self, name: str, arguments: dict = None) -> dict:
+        return self._rpc("prompts/get", {"name": name, "arguments": arguments or {}})
+
+    def read_resource(self, uri: str) -> dict:
+        return self._rpc("resources/read", {"uri": uri})
 
     def close(self):
         self.client.close()

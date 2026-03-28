@@ -1,3 +1,8 @@
+"""
+NgenuMCP — MCP server enumerator and interact tool.
+Connects to any MCP-compatible HTTP endpoint and enumerates tools, prompts,
+and resources. Supports calling methods directly and fuzzing resource URIs.
+"""
 import argparse
 import io
 import json
@@ -8,124 +13,13 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 from httpx import ConnectError, ConnectTimeout, ReadTimeout, TimeoutException
 
 from NgenuMCP.client import EnumClient
+from NgenuMCP.display import BANNER, print_server_info
+from NgenuMCP.handlers import call as call_handler
+from NgenuMCP.handlers import enum as enum_handler
+from NgenuMCP.handlers import fuzz as fuzz_handler
 
 
-BANNER = r"""
-   ▄     ▄▀  ▄███▄      ▄     ▄   █▀▄▀█ ▄█▄    █ ▄▄
-    █  ▄▀    █▀   ▀      █     █  █ █ █ █▀ ▀▄  █   █
-██   █ █ ▀▄  ██▄▄    ██   █ █   █ █ ▄ █ █   ▀  █▀▀▀
-█ █  █ █   █ █▄   ▄▀ █ █  █ █   █ █   █ █▄  ▄▀ █
-█  █ █  ███  ▀███▀   █  █ █ █▄ ▄█    █  ▀███▀   █
-█   ██               █   ██  ▀▀▀    ▀            ▀
-                                    MCP ENUMERATOR
-"""
-
-
-def print_server_info(info: dict):
-    si = info.get("serverInfo", {})
-    caps = info.get("capabilities", {})
-    proto = info.get("protocolVersion", "?")
-    instructions = info.get("instructions", "")
-
-    print(f"\n  Server  : {si.get('name', 'unknown')} v{si.get('version', '?')}")
-    print(f"  Protocol: MCP {proto}")
-
-    if caps:
-        advertised = []
-        if "tools" in caps:
-            advertised.append(f"tools (listChanged={caps['tools'].get('listChanged', '?')})")
-        if "prompts" in caps:
-            advertised.append(f"prompts (listChanged={caps['prompts'].get('listChanged', '?')})")
-        if "resources" in caps:
-            advertised.append(
-                f"resources (subscribe={caps['resources'].get('subscribe', '?')}, "
-                f"listChanged={caps['resources'].get('listChanged', '?')})"
-            )
-        if advertised:
-            print(f"  Capabilities: {', '.join(advertised)}")
-
-    if instructions:
-        print(f"  Instructions: {instructions}")
-
-
-def print_tool_verbose(tool: dict):
-    print(f"    Name       : {tool.get('name')}")
-    print(f"    Description: {tool.get('description', '-')}")
-    schema = tool.get("inputSchema", {})
-    props = schema.get("properties", {})
-    required = schema.get("required", [])
-    if props:
-        print(f"    Parameters :")
-        for param, meta in props.items():
-            req = " (required)" if param in required else " (optional)"
-            ptype = meta.get("type", "any")
-            pdesc = meta.get("description", "")
-            print(f"      - {param} [{ptype}]{req}" + (f": {pdesc}" if pdesc else ""))
-
-
-def print_prompt_verbose(prompt: dict):
-    print(f"    Name       : {prompt.get('name')}")
-    print(f"    Description: {prompt.get('description', '-')}")
-    args = prompt.get("arguments", [])
-    if args:
-        print(f"    Arguments  :")
-        for a in args:
-            req = " (required)" if a.get("required") else " (optional)"
-            print(f"      - {a['name']}{req}" + (f": {a.get('description', '')}" if a.get('description') else ""))
-
-
-def print_resource_verbose(resource: dict):
-    print(f"    Name       : {resource.get('name', '-')}")
-    print(f"    URI        : {resource.get('uri') or resource.get('uriTemplate')}")
-    print(f"    MIME       : {resource.get('mimeType', '-')}")
-    print(f"    Description: {resource.get('description', '-')}")
-
-
-def print_results(results: dict, verbose: set):
-    for category, methods in results.items():
-        print(f"\n[{category.upper()}]")
-        for method, response in methods.items():
-            if "error" in response:
-                print(f"  {method}  ERROR: {response['error']}")
-                continue
-
-            result = response.get("result", {})
-            tools = result.get("tools", [])
-            prompts = result.get("prompts", [])
-            resources = result.get("resources", [])
-            templates = result.get("resourceTemplates", [])
-            items = tools or prompts or resources or templates
-
-            print(f"  {method}  ({len(items)} item{'s' if len(items) != 1 else ''})")
-
-            v_tools = "tools" in verbose or "all" in verbose
-            v_prompts = "prompts" in verbose or "all" in verbose
-            v_resources = "resources" in verbose or "all" in verbose
-
-            for item in tools:
-                if v_tools:
-                    print_tool_verbose(item)
-                else:
-                    name, desc = item.get("name", str(item)), item.get("description", "")
-                    print(f"    - {name}" + (f": {desc}" if desc else ""))
-
-            for item in prompts:
-                if v_prompts:
-                    print_prompt_verbose(item)
-                else:
-                    name, desc = item.get("name", str(item)), item.get("description", "")
-                    print(f"    - {name}" + (f": {desc}" if desc else ""))
-
-            for item in resources + templates:
-                if v_resources:
-                    print_resource_verbose(item)
-                else:
-                    name = item.get("name") or item.get("uri") or item.get("uriTemplate") or str(item)
-                    desc = item.get("description", "")
-                    print(f"    - {name}" + (f": {desc}" if desc else ""))
-
-
-def parse_headers(raw: list) -> dict:
+def _parse_headers(raw: list) -> dict:
     headers = {}
     for h in raw or []:
         if ":" not in h:
@@ -136,99 +30,122 @@ def parse_headers(raw: list) -> dict:
     return headers
 
 
-def main():
-    print(BANNER)
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="NgenuMCP", description="MCP server enumerator")
     parser.add_argument("url", help="Target MCP endpoint (e.g. http://host:3000/mcp)")
     parser.add_argument("-H", "--header", action="append", metavar="KEY:VALUE",
                         help="Extra HTTP header, repeatable")
-    parser.add_argument("--ping", action="store_true",
-                        help="Ping the server instead of enumerating")
-    parser.add_argument("--no-init", action="store_true",
-                        help="Skip MCP initialize handshake")
-    parser.add_argument("--raw", action="store_true",
-                        help="Print raw JSON output")
-    parser.add_argument("-vt", action="store_true",
-                        help="Verbose: show full tool schemas")
-    parser.add_argument("-vp", action="store_true",
-                        help="Verbose: show full prompt arguments")
-    parser.add_argument("-vr", action="store_true",
-                        help="Verbose: show full resource details")
-    parser.add_argument("-vv", action="store_true",
-                        help="Verbose: show full detail for everything")
-    parser.add_argument("-to", action="store_true",
-                        help="Enumerate tools only")
-    parser.add_argument("-po", action="store_true",
-                        help="Enumerate prompts only")
-    parser.add_argument("-ro", action="store_true",
-                        help="Enumerate resources only")
-    args = parser.parse_args()
+    parser.add_argument("-o", metavar="FILE", default=None,
+                        help="Output file for JSON results (default: stdout)")
+    parser.add_argument("--ping",    action="store_true", help="Ping the server")
+    parser.add_argument("--no-init", action="store_true", help="Skip MCP initialize handshake")
+    parser.add_argument("--raw",     action="store_true", help="Print raw JSON output")
 
-    verbose = set()
-    if args.vv:
-        verbose.add("all")
-    else:
-        if args.vt:
-            verbose.add("tools")
-        if args.vp:
-            verbose.add("prompts")
-        if args.vr:
-            verbose.add("resources")
+    enum_group = parser.add_argument_group("enumeration filters")
+    enum_group.add_argument("-to", action="store_true", help="Tools only")
+    enum_group.add_argument("-po", action="store_true", help="Prompts only")
+    enum_group.add_argument("-ro", action="store_true", help="Resources only")
 
-    only = set()
-    if args.to:
-        only.add("tools")
-    if args.po:
-        only.add("prompts")
-    if args.ro:
-        only.add("resources")
+    verb_group = parser.add_argument_group("verbosity")
+    verb_group.add_argument("-vt", action="store_true", help="Verbose: full tool schemas")
+    verb_group.add_argument("-vp", action="store_true", help="Verbose: full prompt arguments")
+    verb_group.add_argument("-vr", action="store_true", help="Verbose: full resource details")
+    verb_group.add_argument("-vv", action="store_true", help="Verbose: everything")
 
-    headers = parse_headers(args.header)
+    call_grp = parser.add_mutually_exclusive_group()
+    call_grp.add_argument("--call-tool",     metavar="NAME", help="Call a tool by name")
+    call_grp.add_argument("--call-prompt",   metavar="NAME", help="Get a prompt by name")
+    call_grp.add_argument("--call-resource", metavar="URI",  help="Read a resource by URI")
+    parser.add_argument("--args", metavar="JSON", default="{}",
+                        help="Arguments as JSON object for --call-tool / --call-prompt")
+
+    fuzz_group = parser.add_argument_group("fuzzing")
+    fuzz_group.add_argument("--fuzz-it",  action="store_true",
+                            help="Fuzz resource URIs using a URI template")
+    fuzz_group.add_argument("--fuzz-uri", metavar="URI_TEMPLATE",
+                            help="URI template with @@FUZZ1 / @@FUZZn placeholders (required with --fuzz-it)")
+    fuzz_group.add_argument("-w", "--wordlist", metavar="FILE", action="append",
+                            help="Wordlist file, repeatable — nth -w feeds @@FUZZn")
+    fuzz_group.add_argument("--threads", metavar="N", type=int, default=4,
+                            help="Number of threads for fuzzing (default: 4)")
+    fuzz_group.add_argument("--show-output", action="store_true",
+                            help="Show resource content for HIT results")
+    fuzz_group.add_argument("--show-miss",   action="store_true",
+                            help="Show miss results")
+
+    return parser
+
+
+def main():
+    print(BANNER)
+    args    = _build_parser().parse_args()
+    headers = _parse_headers(args.header)
+
+    call_type   = None
+    call_target = None
+    if args.call_tool:
+        call_type, call_target = "tool", args.call_tool
+    elif args.call_prompt:
+        call_type, call_target = "prompt", args.call_prompt
+    elif args.call_resource:
+        call_type, call_target = "resource", args.call_resource
+
+    call_args = {}
+    if call_type in ("tool", "prompt") and args.args != "{}":
+        try:
+            call_args = json.loads(args.args)
+            if not isinstance(call_args, dict):
+                raise ValueError("expected a JSON object")
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"[error] Invalid --args JSON: {e}")
+            sys.exit(1)
+
+    only = {cat for flag, cat in [(args.to, "tools"), (args.po, "prompts"), (args.ro, "resources")] if flag}
 
     try:
         with EnumClient(args.url, headers) as client:
             if args.ping:
                 client.initiate_session()
                 resp = client._rpc("ping")
-                print(f"[+] Host {args.url} is reachable 🤖🤖🤖" if "result" in resp else f"[!] Host {args.url} is not reachable ☠️☠️☠️: {resp}")
+                status = "reachable" if "result" in resp else f"unreachable: {resp}"
+                print(f"[+] {args.url} — {status}")
                 return
 
             if not args.no_init:
                 r = client.initiate_session()
-                info = r.get("result", {})
-                print_server_info(info)
+                print_server_info(r.get("result", {}))
 
-            print("\nEnumerating...")
-            only_filter = only or None
-            results = client.enumerate(only=only_filter) if not args.no_init else client.start(only=only_filter)
-
-            if args.raw:
-                print(json.dumps(results, indent=2))
+            if args.fuzz_it:
+                rc = fuzz_handler.run(client, args)
+                if rc:
+                    sys.exit(rc)
+            elif call_type:
+                call_handler.run(client, call_type, call_target, call_args, args)
             else:
-                print_results(results, verbose)
+                enum_handler.run(client, only, args)
 
     except ConnectTimeout:
         print(f"[timeout] Connection to {args.url} timed out.")
         sys.exit(1)
     except ReadTimeout:
-        print(f"[timeout] Server at {args.url} connected but did not respond in time.")
+        print(f"[timeout] Server at {args.url} did not respond in time.")
         sys.exit(1)
     except TimeoutException as e:
         print(f"[timeout] {e}")
         sys.exit(1)
     except ConnectError as e:
-        msg = str(e)
-        if "refused" in msg.lower():
+        msg = str(e).lower()
+        if "refused" in msg:
             print(f"[refused] Connection refused — is the server running at {args.url}?")
-        elif "name or service not known" in msg.lower() or "nodename nor servname" in msg.lower() or "getaddrinfo" in msg.lower():
+        elif any(k in msg for k in ("name or service not known", "nodename nor servname", "getaddrinfo")):
             print(f"[dns] Could not resolve host from {args.url}")
-        elif "network is unreachable" in msg.lower():
-            print(f"[network] Network unreachable — check your connection.")
+        elif "network is unreachable" in msg:
+            print("[network] Network unreachable.")
         else:
             print(f"[connect] {e}")
         sys.exit(1)
     except ValueError as e:
-        print(f"[parse] Unexpected response from server: {e}")
+        print(f"[parse] Unexpected response: {e}")
         sys.exit(1)
     except Exception as e:
         print(f"[error] {type(e).__name__}: {e}")
