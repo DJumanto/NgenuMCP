@@ -1,5 +1,9 @@
 # NgenuMCP
 
+<p align="center">
+  <img src="pict/image.png" alt="NgenuMCP" />
+</p>
+
 MCP server enumeration tool. Connects to any MCP-compatible HTTP server and lists its exposed tools, prompts, and resources — and lets you call or fuzz them directly.
 
 ## Requirements
@@ -49,7 +53,8 @@ calling:
 
 fuzzing:
   --fuzz-it             Fuzz resource URIs using a URI template
-  --fuzz-uri TEMPLATE   URI template with @@FUZZ1 / @@FUZZ2 / @@FUZZn placeholders (required with --fuzz-it)
+  --fuzz-uri URI_TEMPLATE
+                        URI template with @@FUZZ1 / @@FUZZ2 / @@FUZZn placeholders (required with --fuzz-it)
   -w, --wordlist FILE   Wordlist file, repeatable — 1st -w feeds @@FUZZ1, 2nd feeds @@FUZZ2, nth feeds @@FUZZn
   --threads N           Number of threads for fuzzing (default: 4)
   --show-output         Show resource content for HIT results
@@ -93,14 +98,20 @@ python NgenuMCP.py http://target:3000/mcp -H "X-Api-Key:secret" -H "X-Tenant:cor
 Save output to file:
 
 ```bash
-python NgenuMCP.py http://target:3000/mcp -o results.json
-python NgenuMCP.py http://target:3000/mcp --raw -o raw.json
+python NgenuMCP.py http://target:3000/mcp -o results.json   # formatted output to file
+python NgenuMCP.py http://target:3000/mcp --raw             # raw JSON to stdout
 ```
 
 Ping / connectivity check:
 
 ```bash
 python NgenuMCP.py http://target:3000/mcp --ping
+```
+
+Skip the MCP initialize handshake (useful for servers that respond without it):
+
+```bash
+python NgenuMCP.py http://target:3000/mcp --no-init
 ```
 
 ---
@@ -175,7 +186,11 @@ Resource URI fuzzing uses a **URI template** with `@@FUZZn` positional markers. 
 
 | `[HIT]` | `[MAYBE]` | `[miss]` |
 |---|---|---|
-| Valid resource content returned | URI reached but caused a server-side execution error — potentially interesting | Resource not found or unrecognised error |
+| Valid resource content returned | URI reached the server but caused an execution error — potentially interesting | Resource not found, unrecognised error, or content contains a "not found" message |
+
+`[MAYBE]` is worth investigating manually — it means the server processed the URI but something went wrong server-side (e.g. a handler that exists but crashed on the input).
+
+`[miss]` covers both hard errors (resource not found) and soft misses where the server returned content that contains phrases like `"not found"`, `"does not exist"`, or `"no such file"` — common when servers return text instead of an error for missing resources.
 
 ---
 
@@ -289,7 +304,9 @@ NgenuMCP/
 │   ├── servers/
 │   │   ├── stdlib_server.py    Minimal stdlib MCP server (no deps)
 │   │   └── fastmcp_server.py   FastMCP server with tools/prompts/resources
-│   ├── test_client.py          Unit tests (mocked HTTP)
+│   ├── test_client.py          Unit tests — EnumClient (mocked HTTP)
+│   ├── test_fuzz.py            Unit tests — fuzz handler and helpers
+│   ├── test_display.py         Unit tests — all print/output functions
 │   └── test_integration.py     Integration tests (live servers)
 ├── NgenuMCP.py                 Entry point — run this
 ├── pyproject.toml
@@ -300,18 +317,34 @@ NgenuMCP/
 
 ## Running tests
 
-Install dev dependencies and run the full suite (unit + integration):
+Install dev dependencies:
 
 ```bash
 pip install -e ".[dev]"
+```
+
+Run the full suite (unit + integration, starts live servers automatically):
+
+```bash
 pytest
 ```
 
-Run only unit tests (no live server required):
+Run only unit tests (no live server required, fast):
 
 ```bash
-pytest tests/test_client.py
+pytest tests/test_client.py tests/test_fuzz.py tests/test_display.py
 ```
+
+Run only integration tests:
+
+```bash
+pytest tests/test_integration.py
+```
+
+> **Windows note:** if pytest is not on PATH, use the venv directly:
+> ```bash
+> venv/Scripts/pytest
+> ```
 
 Start the FastMCP test server manually:
 

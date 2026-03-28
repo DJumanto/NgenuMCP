@@ -81,6 +81,52 @@ RESOURCE_TEMPLATES = [
     },
 ]
 
+RESOURCE_CONTENT = {
+    "file:///wordlists/common.txt": ("text/plain", "admin\npassword\n123456\nroot\nguest"),
+    "file:///reports/last_scan.json": ("application/json", '{"scan_id":"abc123","target":"example.com"}'),
+}
+
+_TOOL_INDEX   = {t["name"]: t for t in TOOLS}
+_PROMPT_INDEX = {p["name"]: p for p in PROMPTS}
+
+
+def _call_tool(params):
+    name = params.get("name", "")
+    args = params.get("arguments", {})
+    tool = _TOOL_INDEX.get(name)
+    if not tool:
+        return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {name}"}]}
+    missing = [r for r in tool["inputSchema"].get("required", []) if r not in args]
+    if missing:
+        return {"isError": True, "content": [{"type": "text", "text": f"Missing required: {', '.join(missing)}"}]}
+    return {"isError": False, "content": [{"type": "text", "text": f"{name} result for {json.dumps(args)}"}]}
+
+
+def _get_prompt(params):
+    name   = params.get("name", "")
+    args   = params.get("arguments", {})
+    prompt = _PROMPT_INDEX.get(name)
+    if not prompt:
+        raise ValueError(f"Unknown prompt: {name}")
+    return {
+        "description": prompt["description"],
+        "messages": [{"role": "user", "content": {"type": "text", "text": f"{name}: {json.dumps(args)}"}}],
+    }
+
+
+def _read_resource(params):
+    uri     = params.get("uri", "")
+    content = RESOURCE_CONTENT.get(uri)
+    if content:
+        mime, text = content
+        return {"contents": [{"uri": uri, "mimeType": mime, "text": text}]}
+    if uri.startswith("file:///reports/") and uri.endswith(".json"):
+        scan_id = uri.split("/")[-1].replace(".json", "")
+        return {"contents": [{"uri": uri, "mimeType": "application/json",
+                               "text": json.dumps({"scan_id": scan_id, "status": "completed"})}]}
+    raise ValueError(f"Resource not found: {uri}")
+
+
 DISPATCH = {
     "initialize": lambda p: {
         "protocolVersion": "2024-11-05",
@@ -91,11 +137,14 @@ DISPATCH = {
         },
         "serverInfo": {"name": "NgenuMCP-SampleServer", "version": "1.0.0"},
     },
-    "ping": lambda p: {},
-    "tools/list": lambda p: {"tools": TOOLS},
-    "prompts/list": lambda p: {"prompts": PROMPTS},
-    "resources/list": lambda p: {"resources": RESOURCES},
+    "ping":                    lambda p: {},
+    "tools/list":              lambda p: {"tools": TOOLS},
+    "prompts/list":            lambda p: {"prompts": PROMPTS},
+    "resources/list":          lambda p: {"resources": RESOURCES},
     "resources/templates/list": lambda p: {"resourceTemplates": RESOURCE_TEMPLATES},
+    "tools/call":              _call_tool,
+    "prompts/get":             _get_prompt,
+    "resources/read":          _read_resource,
 }
 
 
@@ -105,7 +154,7 @@ class MCPHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
+        body   = self.rfile.read(length)
 
         try:
             msg = json.loads(body)
@@ -114,7 +163,7 @@ class MCPHandler(BaseHTTPRequestHandler):
             return
 
         method = msg.get("method", "")
-        rid = msg.get("id")
+        rid    = msg.get("id")
 
         if rid is None:
             self._send(200, {})
@@ -122,21 +171,15 @@ class MCPHandler(BaseHTTPRequestHandler):
 
         handler = DISPATCH.get(method)
         if handler is None:
-            payload = {
-                "jsonrpc": "2.0",
-                "id": rid,
-                "error": {"code": -32601, "message": f"Method not found: {method}"},
-            }
+            payload = {"jsonrpc": "2.0", "id": rid,
+                       "error": {"code": -32601, "message": f"Method not found: {method}"}}
         else:
             try:
-                result = handler(msg.get("params", {}))
+                result  = handler(msg.get("params", {}))
                 payload = {"jsonrpc": "2.0", "id": rid, "result": result}
             except Exception as exc:
-                payload = {
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "error": {"code": -32603, "message": str(exc)},
-                }
+                payload = {"jsonrpc": "2.0", "id": rid,
+                           "error": {"code": -32603, "message": str(exc)}}
 
         self._send(200, payload)
 
@@ -152,8 +195,8 @@ class MCPHandler(BaseHTTPRequestHandler):
 class SampleMCPServer:
     def __init__(self, host="127.0.0.1", port=0):
         self._server = HTTPServer((host, port), MCPHandler)
-        self.host = host
-        self.port = self._server.server_address[1]
+        self.host    = host
+        self.port    = self._server.server_address[1]
         self._thread = None
 
     @property

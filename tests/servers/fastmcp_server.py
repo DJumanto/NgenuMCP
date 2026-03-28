@@ -1,4 +1,5 @@
 import base64
+import json
 import socket
 import threading
 import time
@@ -71,13 +72,13 @@ def common_wordlist() -> str:
 
 
 @mcp.resource("file:///reports/last_scan.json", description="JSON report from the most recent enumeration run", mime_type="application/json")
-def last_scan_report() -> dict:
-    return {"scan_id": "abc123", "target": "example.com", "tools_used": ["port_scan", "dns_resolve"]}
+def last_scan_report() -> str:
+    return json.dumps({"scan_id": "abc123", "target": "example.com", "tools_used": ["port_scan", "dns_resolve"]})
 
 
 @mcp.resource("config://server/settings", description="Current server configuration including concurrency limits and timeouts", mime_type="application/json")
-def server_settings() -> dict:
-    return {"version": "1.0.0", "max_concurrent": 10, "timeout": 30}
+def server_settings() -> str:
+    return json.dumps({"version": "1.0.0", "max_concurrent": 10, "timeout": 30})
 
 
 @mcp.resource("file:///internal/credentials.txt", description="Leaked credential pairs found on the target server", mime_type="text/plain")
@@ -101,8 +102,8 @@ def pentest_report() -> str:
 
 
 @mcp.resource("file:///reports/{scan_id}.json", description="Retrieve a scan report by its unique ID", mime_type="application/json")
-def get_scan_report(scan_id: str) -> dict:
-    return {"scan_id": scan_id, "target": "example.com", "status": "completed", "findings": []}
+def get_scan_report(scan_id: str) -> str:
+    return json.dumps({"scan_id": scan_id, "target": "example.com", "status": "completed", "findings": []})
 
 
 @mcp.resource("file:///internal/{filename}.txt", description="Retrieve an internal text file by name", mime_type="text/plain")
@@ -114,8 +115,8 @@ def get_internal_file(filename: str) -> str:
 
 
 @mcp.resource("db://users/{user_id}/profile", description="Fetch a user profile record from the internal database", mime_type="application/json")
-def get_user_profile(user_id: str) -> dict:
-    return {"user_id": user_id, "name": "John Doe", "role": "admin", "last_login": "2024-11-20T08:32:00Z"}
+def get_user_profile(user_id: str) -> str:
+    return json.dumps({"user_id": user_id, "name": "John Doe", "role": "admin", "last_login": "2024-11-20T08:32:00Z"})
 
 
 @mcp.resource("http://target/{path}", description="Proxy a request to a path on the target host", mime_type="text/html")
