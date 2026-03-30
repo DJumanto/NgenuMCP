@@ -167,10 +167,44 @@ def print_call_result(result: dict, call_type: str):
         print_resource_content(result)
 
 
+def print_fuzz_tool_result(resp: dict, indent: str = "    "):
+    """Print tool call content for a fuzz HIT."""
+    res = resp.get("result", {})
+    if res.get("isError"):
+        print(f"{indent}[tool error]")
+    for item in res.get("content", []):
+        itype = item.get("type")
+        if itype == "text":
+            for line in item.get("text", "").splitlines():
+                print(f"{indent}{line}")
+        elif itype == "image":
+            print(f"{indent}[image/{item.get('mimeType', '?')}] (base64 omitted)")
+        else:
+            print(f"{indent}{json.dumps(item, indent=2)}")
+
+
+def print_fuzz_prompt_result(resp: dict, indent: str = "    "):
+    """Print prompt messages for a fuzz HIT."""
+    res  = resp.get("result", {})
+    desc = res.get("description")
+    if desc:
+        print(f"{indent}Description: {desc}")
+    for msg in res.get("messages", []):
+        role    = msg.get("role", "?")
+        content = msg.get("content", {})
+        if isinstance(content, dict) and content.get("type") == "text":
+            text = content.get("text", "")
+            if len(text) > 300:
+                text = text[:300] + " [...]"
+            print(f"{indent}[{role}] {text}")
+        else:
+            print(f"{indent}[{role}] {json.dumps(content)}")
+
+
 def print_fuzz_summary(results: list):
-    hits   = sum(1 for _, s, _ in results if s == "HIT")
-    maybes = sum(1 for _, s, _ in results if s == "MAYBE")
-    misses = sum(1 for _, s, _ in results if s == "miss")
+    hits   = sum(1 for r in results if r[1] == "HIT")
+    maybes = sum(1 for r in results if r[1] == "MAYBE")
+    misses = sum(1 for r in results if r[1] == "miss")
     print(f"\n  done — [HIT] {hits} | [MAYBE] {maybes} | [miss] {misses}")
     if not hits and not maybes:
         print("  No hits found.")

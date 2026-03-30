@@ -62,6 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
     fuzz_group = parser.add_argument_group("fuzzing")
     fuzz_group.add_argument("--fuzz-it",  action="store_true",
                             help="Fuzz resource URIs using a URI template")
+    fuzz_group.add_argument("--fuzz-target", metavar="TARGET", help="Set target: tool|prompt|resource (default: resource)", default="resource")
     fuzz_group.add_argument("--fuzz-uri", metavar="URI_TEMPLATE",
                             help="URI template with @@FUZZ1 / @@FUZZn placeholders (required with --fuzz-it)")
     fuzz_group.add_argument("-w", "--wordlist", metavar="FILE", action="append",
@@ -72,7 +73,8 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="Show resource content for HIT results")
     fuzz_group.add_argument("--show-miss",   action="store_true",
                             help="Show miss results")
-
+    fuzz_group.add_argument("--fuzz-args", metavar="JSON", default="{}", 
+                            help="JSON fuzzing argument (needed for fuzzing tools/prompts), either json string or text file")
     return parser
 
 

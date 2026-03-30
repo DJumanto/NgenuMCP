@@ -1,0 +1,4 @@
+# domains for prompt fuzzing
+example.com
+scanme.nmap.org
+evil.internal

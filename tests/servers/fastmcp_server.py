@@ -155,7 +155,7 @@ class FastMCPTestServer:
 
 
 if __name__ == "__main__":
-    srv = FastMCPTestServer(port=5173)
+    srv = FastMCPTestServer(port=5533)
     srv.start(wait=0)
     print(f"FastMCP sample server running at {srv.url}")
     try:

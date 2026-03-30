@@ -16,8 +16,19 @@ from NgenuMCP.handlers.fuzz import (
 
 
 def _args(**kwargs):
-    defaults = dict(fuzz_uri=None, wordlist=None, threads=4,
-                    show_output=False, show_miss=False, raw=False, o=None)
+    defaults = dict(
+        fuzz_target="resource",
+        fuzz_uri=None,
+        fuzz_args="{}",
+        call_tool=None,
+        call_prompt=None,
+        wordlist=None,
+        threads=4,
+        show_output=False,
+        show_miss=False,
+        raw=False,
+        o=None,
+    )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
 
@@ -28,6 +39,18 @@ def _hit_resp(uri="file:///x", text="secret data"):
 
 def _miss_resp(msg="Resource not found"):
     return {"error": {"code": -32001, "message": msg}}
+
+
+def _tool_hit_resp(text="scan result"):
+    return {"result": {"content": [{"type": "text", "text": text}], "isError": False}}
+
+
+def _tool_error_resp(msg="missing required argument: host"):
+    return {"error": {"code": -32602, "message": msg}}
+
+
+def _prompt_hit_resp(text="recon report for example.com"):
+    return {"result": {"messages": [{"role": "user", "content": {"type": "text", "text": text}}]}}
 
 
 # ── _fuzz_status ──────────────────────────────────────────────────────────────
@@ -216,9 +239,9 @@ class TestLoadWordlist:
         assert words == ["ノスフェラトゥ", "credentials"]
 
 
-# ── fuzz.run ──────────────────────────────────────────────────────────────────
+# ── fuzz.run — resource ───────────────────────────────────────────────────────
 
-class TestFuzzRun:
+class TestFuzzRunResource:
     def test_no_fuzz_uri(self, capsys):
         rc = run(MagicMock(), _args())
         assert rc == 1
@@ -277,7 +300,6 @@ class TestFuzzRun:
 
         run(client, _args(fuzz_uri="@@FUZZ1", wordlist=[str(wl)], show_miss=False))
         out = capsys.readouterr().out
-        # summary always shows count e.g. "[miss] 1" — check per-item lines are absent
         assert "  [miss]  " not in out
 
     def test_show_output_prints_content(self, tmp_path, capsys):
@@ -351,3 +373,219 @@ class TestFuzzRun:
         assert rc == 0
         assert len(calls) == 1
         assert calls[0] == "x/x"
+
+
+# ── fuzz.run — tool ───────────────────────────────────────────────────────────
+
+class TestFuzzRunTool:
+    def test_no_fuzz_args(self, capsys):
+        rc = run(MagicMock(), _args(fuzz_target="tool", call_tool="port_scan"))
+        assert rc == 1
+        assert "--fuzz-args" in capsys.readouterr().out
+
+    def test_no_call_tool_name(self, capsys):
+        rc = run(MagicMock(), _args(fuzz_target="tool", fuzz_args='{"host":"@@FUZZ1"}',
+                                    wordlist=["x.txt"]))
+        assert rc == 1
+        assert "--call-tool" in capsys.readouterr().out
+
+    def test_fuzz_args_from_file(self, tmp_path, capsys):
+        wl = tmp_path / "w.txt"
+        wl.write_text("127.0.0.1\n", encoding="utf-8")
+        jf = tmp_path / "args.json"
+        jf.write_text('{"host": "@@FUZZ1"}', encoding="utf-8")
+
+        client = MagicMock()
+        client.call_tool.return_value = _tool_hit_resp("Scan results for 127.0.0.1")
+
+        rc = run(client, _args(fuzz_target="tool", call_tool="port_scan",
+                               fuzz_args=str(jf), wordlist=[str(wl)]))
+        assert rc == 0
+        client.call_tool.assert_called_once_with("port_scan", {"host": "127.0.0.1"})
+
+    def test_integer_value_injected_correctly(self, tmp_path):
+        """Wordlist integer stays int because marker is unquoted in template."""
+        wl = tmp_path / "w.txt"
+        wl.write_text("80\n443\n", encoding="utf-8")
+
+        calls = []
+        client = MagicMock()
+        client.call_tool.side_effect = lambda n, a: (calls.append(a), _tool_hit_resp())[1]
+
+        rc = run(client, _args(fuzz_target="tool", call_tool="port_scan",
+                               fuzz_args='{"host":"localhost","port":@@FUZZ1}',
+                               wordlist=[str(wl)]))
+        assert rc == 0
+        assert {"host": "localhost", "port": 80}  in calls
+        assert {"host": "localhost", "port": 443} in calls
+
+    def test_invalid_json_after_substitution(self, tmp_path, capsys):
+        """Template that produces malformed JSON after substitution returns error."""
+        wl = tmp_path / "w.txt"
+        wl.write_text("value\n", encoding="utf-8")
+        # missing closing brace → invalid JSON after substitution
+        rc = run(MagicMock(), _args(fuzz_target="tool", call_tool="scan",
+                                    fuzz_args='{"host": "@@FUZZ1"',
+                                    wordlist=[str(wl)]))
+        assert rc == 1
+        assert "invalid json" in capsys.readouterr().out.lower()
+
+    def test_no_markers_in_args(self, capsys):
+        rc = run(MagicMock(), _args(fuzz_target="tool", call_tool="scan",
+                                    fuzz_args='{"host": "static"}', wordlist=["x.txt"]))
+        assert rc == 1
+        assert "@@FUZZn" in capsys.readouterr().out
+
+    def test_no_wordlist(self, capsys):
+        rc = run(MagicMock(), _args(fuzz_target="tool", call_tool="scan",
+                                    fuzz_args='{"host":"@@FUZZ1"}'))
+        assert rc == 1
+        assert "-w WORDLIST" in capsys.readouterr().out
+
+    def test_hits_counted(self, tmp_path, capsys):
+        wl = tmp_path / "w.txt"
+        wl.write_text("127.0.0.1\n10.0.0.1\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.call_tool.return_value = _tool_hit_resp()
+
+        rc = run(client, _args(fuzz_target="tool", call_tool="port_scan",
+                               fuzz_args='{"host":"@@FUZZ1"}', wordlist=[str(wl)]))
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "[HIT] 2" in out
+        assert "[FUZZING TOOLS]" in out
+
+    def test_miss_bad_args(self, tmp_path, capsys):
+        wl = tmp_path / "w.txt"
+        wl.write_text("bad\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.call_tool.return_value = _tool_error_resp("missing required argument: host")
+
+        run(client, _args(fuzz_target="tool", call_tool="scan",
+                          fuzz_args='{"host":"@@FUZZ1"}', wordlist=[str(wl)],
+                          show_miss=True))
+        out = capsys.readouterr().out
+        assert "[miss]" in out
+
+    def test_show_output_prints_content(self, tmp_path, capsys):
+        wl = tmp_path / "w.txt"
+        wl.write_text("127.0.0.1\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.call_tool.return_value = _tool_hit_resp("Open ports: 22, 80, 443")
+
+        run(client, _args(fuzz_target="tool", call_tool="port_scan",
+                          fuzz_args='{"host":"@@FUZZ1"}', wordlist=[str(wl)],
+                          show_output=True))
+        out = capsys.readouterr().out
+        assert "Open ports: 22, 80, 443" in out
+
+    def test_raw_output_is_valid_json(self, tmp_path, capsys):
+        wl = tmp_path / "w.txt"
+        wl.write_text("127.0.0.1\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.call_tool.return_value = _tool_hit_resp()
+
+        run(client, _args(fuzz_target="tool", call_tool="port_scan",
+                          fuzz_args='{"host":"@@FUZZ1"}', wordlist=[str(wl)], raw=True))
+        out = capsys.readouterr().out
+        data = json.loads(out[out.index("{"):])
+        assert data["target"] == "tool"
+        assert data["name"] == "port_scan"
+        assert data["results"][0]["injected_args"] == {"host": "127.0.0.1"}
+        assert data["results"][0]["status"] == "HIT"
+
+    def test_file_output_tool(self, tmp_path):
+        wl    = tmp_path / "w.txt"
+        out_f = tmp_path / "out.json"
+        wl.write_text("127.0.0.1\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.call_tool.return_value = _tool_hit_resp()
+
+        run(client, _args(fuzz_target="tool", call_tool="port_scan",
+                          fuzz_args='{"host":"@@FUZZ1"}', wordlist=[str(wl)],
+                          o=str(out_f)))
+        data = json.loads(out_f.read_text(encoding="utf-8"))
+        assert data["target"] == "tool"
+        assert data["results"][0]["status"] == "HIT"
+        assert "injected_args" in data["results"][0]
+
+    def test_multi_marker_tool(self, tmp_path, capsys):
+        """Unquoted @@FUZZ2 in template → port is parsed as JSON integer, not string."""
+        wl1 = tmp_path / "hosts.txt"
+        wl2 = tmp_path / "ports.txt"
+        wl1.write_text("127.0.0.1\n10.0.0.1\n", encoding="utf-8")
+        wl2.write_text("80\n443\n", encoding="utf-8")
+
+        calls = []
+        client = MagicMock()
+        client.call_tool.side_effect = lambda n, a: (calls.append(a), _tool_hit_resp())[1]
+
+        rc = run(client, _args(fuzz_target="tool", call_tool="port_scan",
+                               fuzz_args='{"host":"@@FUZZ1","port":@@FUZZ2}',
+                               wordlist=[str(wl1), str(wl2)]))
+        assert rc == 0
+        assert len(calls) == 4  # 2 × 2
+        assert {"host": "127.0.0.1", "port": 80}  in calls
+        assert {"host": "10.0.0.1",  "port": 443} in calls
+
+
+# ── fuzz.run — prompt ─────────────────────────────────────────────────────────
+
+class TestFuzzRunPrompt:
+    def test_no_call_prompt_name(self, capsys):
+        rc = run(MagicMock(), _args(fuzz_target="prompt", fuzz_args='{"target":"@@FUZZ1"}',
+                                    wordlist=["x.txt"]))
+        assert rc == 1
+        assert "--call-prompt" in capsys.readouterr().out
+
+    def test_hits_counted(self, tmp_path, capsys):
+        wl = tmp_path / "w.txt"
+        wl.write_text("example.com\nevil.com\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.get_prompt.return_value = _prompt_hit_resp()
+
+        rc = run(client, _args(fuzz_target="prompt", call_prompt="recon_report",
+                               fuzz_args='{"target":"@@FUZZ1"}', wordlist=[str(wl)]))
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "[FUZZING PROMPTS]" in out
+        assert "[HIT] 2" in out
+
+    def test_show_output_prints_messages(self, tmp_path, capsys):
+        wl = tmp_path / "w.txt"
+        wl.write_text("example.com\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.get_prompt.return_value = _prompt_hit_resp("recon report for example.com")
+
+        run(client, _args(fuzz_target="prompt", call_prompt="recon_report",
+                          fuzz_args='{"target":"@@FUZZ1"}', wordlist=[str(wl)],
+                          show_output=True))
+        out = capsys.readouterr().out
+        assert "recon report for example.com" in out
+
+    def test_raw_output_prompt(self, tmp_path, capsys):
+        wl = tmp_path / "w.txt"
+        wl.write_text("example.com\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.get_prompt.return_value = _prompt_hit_resp()
+
+        run(client, _args(fuzz_target="prompt", call_prompt="recon_report",
+                          fuzz_args='{"target":"@@FUZZ1"}', wordlist=[str(wl)], raw=True))
+        out = capsys.readouterr().out
+        data = json.loads(out[out.index("{"):])
+        assert data["target"] == "prompt"
+        assert data["name"] == "recon_report"
+        assert data["results"][0]["injected_args"] == {"target": "example.com"}
+
+    def test_invalid_target(self, capsys):
+        rc = run(MagicMock(), _args(fuzz_target="banana"))
+        assert rc == 1
+        assert "Invalid --fuzz-target" in capsys.readouterr().out

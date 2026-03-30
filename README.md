@@ -52,12 +52,15 @@ calling:
   --args JSON           Arguments as JSON object for --call-tool / --call-prompt
 
 fuzzing:
-  --fuzz-it             Fuzz resource URIs using a URI template
+  --fuzz-it             Enable fuzzing mode
+  --fuzz-target TARGET  What to fuzz: tool | prompt | resource (default: resource)
   --fuzz-uri URI_TEMPLATE
-                        URI template with @@FUZZ1 / @@FUZZ2 / @@FUZZn placeholders (required with --fuzz-it)
+                        URI template with @@FUZZ1 / @@FUZZn placeholders (resource fuzzing)
+  --fuzz-args JSON      Args template with @@FUZZ1 / @@FUZZn placeholders (tool/prompt fuzzing).
+                        Accepts a JSON string or a path to a text file.
   -w, --wordlist FILE   Wordlist file, repeatable — 1st -w feeds @@FUZZ1, 2nd feeds @@FUZZ2, nth feeds @@FUZZn
   --threads N           Number of threads for fuzzing (default: 4)
-  --show-output         Show resource content for HIT results
+  --show-output         Show response content for HIT results
   --show-miss           Show failed fuzz attempts (miss results)
 ```
 
@@ -118,11 +121,6 @@ python NgenuMCP.py http://target:3000/mcp --no-init
 
 ## Calling
 
-> **Windows note:** single quotes are not stripped by the shell. Always use double quotes with escaped inner quotes for `--args`:
-> ```bash
-> --args "{\"key\":\"value\"}"
-> ```
-
 ### Call a tool
 
 ```bash
@@ -180,94 +178,158 @@ python NgenuMCP.py http://target:3000/mcp --call-resource "file:///reports/pente
 
 ## Fuzzing
 
-Resource URI fuzzing uses a **URI template** with `@@FUZZn` positional markers. Each `@@FUZZn` is replaced by a word from the corresponding `-w` wordlist, and all combinations are tried (cartesian product). Only resource fuzzing is supported.
+Fuzzing iterates wordlists over `@@FUZZn` positional markers and tries all combinations (cartesian product). Three targets are supported: **resource** URIs, **tool** arguments, and **prompt** arguments.
 
 ### Result codes
 
-| `[HIT]` | `[MAYBE]` | `[miss]` |
-|---|---|---|
-| Valid resource content returned | URI reached the server but caused an execution error — potentially interesting | Resource not found, unrecognised error, or content contains a "not found" message |
+| Code | Meaning |
+|---|---|
+| `[HIT]` | Valid response — resource content returned, or tool/prompt executed successfully |
+| `[MAYBE]` | Request reached the server but caused an execution-level error — potentially interesting |
+| `[miss]` | Not found, bad arguments, or response text contains a "not found" phrase |
 
-`[MAYBE]` is worth investigating manually — it means the server processed the URI but something went wrong server-side (e.g. a handler that exists but crashed on the input).
+`[MAYBE]` is worth investigating manually — the server processed the input but something went wrong server-side (e.g. a handler that exists but crashed).
 
-`[miss]` covers both hard errors (resource not found) and soft misses where the server returned content that contains phrases like `"not found"`, `"does not exist"`, or `"no such file"` — common when servers return text instead of an error for missing resources.
-
----
-
-### URI template syntax
-
-Use `@@FUZZ1`, `@@FUZZ2`, … `@@FUZZn` as placeholders in the URI template:
-
-```
-file:///internal/@@FUZZ1.txt          # single position
-file:///@@FUZZ1/@@FUZZ2/secret.txt    # two positions — all combinations tried
-```
-
-The nth `-w` wordlist feeds `@@FUZZn`. If you supply fewer wordlists than markers, the last wordlist is reused.
+`[miss]` covers both hard errors and soft misses where the server returns text containing phrases like `"not found"`, `"does not exist"`, or `"no such file"`.
 
 ---
 
-### Single-position fuzzing
+### Placeholder syntax
 
-```bash
-# Fuzz filename in a URI template using a custom wordlist
-python NgenuMCP.py http://target:3000/mcp --fuzz-it --fuzz-uri "file:///internal/@@FUZZ1.txt" -w names.txt
+Use `@@FUZZ1`, `@@FUZZ2`, … `@@FUZZn` as placeholders anywhere in a URI or JSON args template. The nth `-w` wordlist feeds `@@FUZZn`. If you supply fewer wordlists than markers, the last one is reused.
 
-# Use the built-in resource wordlist (full URI per line — each line is tried as-is)
-python NgenuMCP.py http://target:3000/mcp --fuzz-it --fuzz-uri "@@FUZZ1" -w NgenuMCP/wordlists/resources.txt
-
-# Path traversal fuzzing with an encoding wordlist
-python NgenuMCP.py http://target:3000/mcp --fuzz-it --fuzz-uri "file:///app/@@FUZZ1" -w traversal.txt
+**Resource URI template:**
+```
+file:///internal/@@FUZZ1.txt          # single marker
+file:///@@FUZZ1/@@FUZZ2/secret.txt    # two markers — cartesian product
 ```
 
-### Multi-position fuzzing
+**Tool / prompt args template (JSON):**
+```json
+{"host": "@@FUZZ1", "ports": "@@FUZZ2"}
+{"host": "@@FUZZ1", "port": @@FUZZ2}
+```
 
-Each marker gets its own `-w` wordlist. All combinations are tried.
+> Markers inside JSON string quotes stay strings after substitution. Unquoted markers take on the JSON type of the substituted word (e.g. `@@FUZZ2` → `80` becomes the integer `80`).
+
+---
+
+### Resource fuzzing
+
+Fuzz resource URIs by iterating filenames, paths, or full URIs.
 
 ```bash
-# @@FUZZ1 from users.txt, @@FUZZ2 from actions.txt
+# Fuzz a filename in a URI template
+python NgenuMCP.py http://target:3000/mcp --fuzz-it \
+  --fuzz-uri "file:///internal/@@FUZZ1.txt" -w names.txt
+
+# Full-URI wordlist (each line tried as-is)
+python NgenuMCP.py http://target:3000/mcp --fuzz-it \
+  --fuzz-uri "@@FUZZ1" -w NgenuMCP/wordlists/resources.txt
+
+# Path traversal
+python NgenuMCP.py http://target:3000/mcp --fuzz-it \
+  --fuzz-uri "file:///app/@@FUZZ1" -w traversal.txt
+
+# Multi-marker — 2 wordlists, all combinations tried
 python NgenuMCP.py http://target:3000/mcp --fuzz-it \
   --fuzz-uri "db://@@FUZZ1/@@FUZZ2/profile" \
   -w users.txt -w actions.txt
+```
 
-# Three positions — 1st and 2nd get own lists, 3rd reuses the 2nd
+---
+
+### Tool fuzzing
+
+Fuzz tool arguments using a JSON template. Pass the template as a string or as a `.json` file. The tool name is set with `--call-tool`.
+
+```bash
+# Inline JSON template — fuzz the host argument
 python NgenuMCP.py http://target:3000/mcp --fuzz-it \
-  --fuzz-uri "file:///@@FUZZ1/@@FUZZ2/@@FUZZ3.txt" \
-  -w dirs.txt -w subdirs.txt
+  --fuzz-target tool --call-tool port_scan \
+  --fuzz-args '{"host":"@@FUZZ1","ports":"80,443"}' \
+  -w hosts.txt
+
+# JSON file template — fuzz host and port simultaneously
+python NgenuMCP.py http://target:3000/mcp --fuzz-it \
+  --fuzz-target tool --call-tool port_scan \
+  --fuzz-args args_template.json \
+  -w hosts.txt -w ports.txt
 ```
 
-### Viewing results
-
-```bash
-# Show resource content for every HIT inline
-python NgenuMCP.py http://target:3000/mcp --fuzz-it --fuzz-uri "file:///internal/@@FUZZ1.txt" -w names.txt --show-output
-
-# Also show every failed attempt (miss results)
-python NgenuMCP.py http://target:3000/mcp --fuzz-it --fuzz-uri "file:///internal/@@FUZZ1.txt" -w names.txt --show-output --show-miss
+**`args_template.json`** (port as an unquoted integer):
+```json
+{"host": "@@FUZZ1", "port": @@FUZZ2}
 ```
 
-### Threading and output
+---
+
+### Prompt fuzzing
+
+Fuzz prompt arguments the same way — use `--fuzz-target prompt` and `--call-prompt`.
 
 ```bash
+python NgenuMCP.py http://target:3000/mcp --fuzz-it \
+  --fuzz-target prompt --call-prompt recon_report \
+  --fuzz-args '{"target":"@@FUZZ1"}' \
+  -w domains.txt
+```
+
+---
+
+### Common options
+
+```bash
+# Show response content inline for every HIT
+... --show-output
+
+# Also show miss results
+... --show-miss
+
 # More threads
-python NgenuMCP.py http://target:3000/mcp --fuzz-it --fuzz-uri "file:///internal/@@FUZZ1.txt" -w names.txt --threads 20
+... --threads 20
 
-# Save results to JSON file
-python NgenuMCP.py http://target:3000/mcp --fuzz-it --fuzz-uri "file:///internal/@@FUZZ1.txt" -w names.txt -o fuzz.json
+# Save all results to a JSON file
+... -o fuzz_results.json
 
-# Raw JSON output
-python NgenuMCP.py http://target:3000/mcp --fuzz-it --fuzz-uri "file:///internal/@@FUZZ1.txt" -w names.txt --raw
+# Raw JSON to stdout
+... --raw
 ```
 
-### Built-in wordlist
+**JSON output format** (`-o` / `--raw`):
 
-Located in `NgenuMCP/wordlists/resources.txt` — use with `@@FUZZ1` as a full-URI wordlist:
-
-```bash
-python NgenuMCP.py http://target:3000/mcp --fuzz-it --fuzz-uri "@@FUZZ1" -w NgenuMCP/wordlists/resources.txt
+```json
+{
+  "target": "tool",
+  "name": "port_scan",
+  "fuzz_template": "{\"host\":\"@@FUZZ1\",\"port\":@@FUZZ2}",
+  "results": [
+    {
+      "label": "@@FUZZ1=127.0.0.1 | @@FUZZ2=80",
+      "injected_args": {"host": "127.0.0.1", "port": 80},
+      "status": "HIT",
+      "response": { ... }
+    }
+  ]
+}
 ```
 
-Covers:
+Resource fuzz output uses `uri_template` instead of `name`/`fuzz_template`/`injected_args`.
+
+---
+
+### Built-in wordlists
+
+Located in `NgenuMCP/wordlists/`:
+
+| File | Use |
+|---|---|
+| `resources.txt` | Full resource URIs — use with `--fuzz-uri "@@FUZZ1"` |
+| `hosts.txt` | Common internal hostnames and IPs |
+| `ports.txt` | Common ports |
+| `domains.txt` | Domain names for prompt/tool fuzzing |
+
+`resources.txt` covers:
 - Standard Linux/Windows file paths
 - Path traversal: `../`, URL-encoded (`%2F`, `%2e%2e`), double-encoded (`%252F`), backslash, Unicode overlong
 - Null byte injection (`%00`)

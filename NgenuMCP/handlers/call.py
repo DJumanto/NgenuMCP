@@ -7,6 +7,7 @@ def run(client, call_type: str, call_target: str, call_args: dict, args):
     print(f"\nCalling {call_type}: {call_target}" + (f" {call_args}" if call_args else "") + " ...")
 
     if call_type == "tool":
+        print(call_args)
         result = client.call_tool(call_target, call_args)
     elif call_type == "prompt":
         result = client.get_prompt(call_target, call_args)
